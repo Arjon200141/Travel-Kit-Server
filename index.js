@@ -125,6 +125,34 @@ async function run() {
       }
     });
 
+    app.get('/products/:id', async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) }
+      const result = await productCollection.findOne(query);
+      res.send(result);
+    })
+
+    app.patch('/products/:id' , async(req,res)=>{
+      const item = req.body;
+      const id = req.params.id;
+      const filter = {_id : new ObjectId(id)}
+      const updatedDoc = {
+        $set:{
+          image: item.image,
+          productName: item.productName,
+          description: item.description,
+          price: item.price,
+          category: item.category,
+          type: "Normal",
+          companyName: item.companyName,
+          warranty: item.warranty,
+          rating: item.rating
+        }
+      }
+      const result = await productCollection.updateOne(filter,updatedDoc);
+      res.send(result);
+    })
+
     app.post('/products', verifyToken, verifyAdmin, async (req, res) => {
       const item = req.body;
       const result = await productCollection.insertOne(item);
@@ -157,6 +185,17 @@ async function run() {
         const id = req.params.id;
         const query = { _id: new ObjectId(id) };
         const result = await cartCollection.deleteOne(query);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: 'Internal Server Error' });
+      }
+    });
+
+    app.delete('/products/:id', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await productCollection.deleteOne(query);
         res.send(result);
       } catch (error) {
         res.status(500).send({ message: 'Internal Server Error' });
