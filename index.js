@@ -3,6 +3,7 @@ const app = express();
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
 const port = process.env.PORT || 5000;
+const stripe = require('stripe')('sk_test_51PQkr9DcLfNezDuzuWKNPJwUZJIzczctBEH8zegqpcwvkJdNqLjGOkAF9R0NzDCYI9JxqsqSTiYlpozFw7NCyQij00VYwyY2EQ');
 require('dotenv').config();
 
 app.use(cors());
@@ -31,12 +32,13 @@ async function run() {
     const reviewsCollection = client.db('travel_kit').collection('reviews');
     const cartCollection = client.db('travel_kit').collection('carts');
     const userCollection = client.db('travel_kit').collection('users');
+    const paymentCollection = client.db('travel_kit').collection('payments');
 
     app.post('/jwt', async (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
       res.send({ token });
-    })
+    });
 
     // middlewares 
     const verifyToken = (req, res, next) => {
@@ -47,12 +49,12 @@ async function run() {
       const token = req.headers.authorization.split(' ')[1];
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
-          return res.status(401).send({ message: 'unauthorized access' })
+          return res.status(401).send({ message: 'unauthorized access' });
         }
         req.decoded = decoded;
         next();
-      })
-    }
+      });
+    };
 
     const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
@@ -63,7 +65,7 @@ async function run() {
         return res.status(403).send({ message: 'forbidden access' });
       }
       next();
-    }
+    };
 
     app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
       const result = await userCollection.find().toArray();
@@ -74,7 +76,7 @@ async function run() {
       const email = req.params.email;
 
       if (email !== req.decoded.email) {
-        return res.status(403).send({ message: 'forbidden access' })
+        return res.status(403).send({ message: 'forbidden access' });
       }
 
       const query = { email: email };
@@ -84,17 +86,30 @@ async function run() {
         admin = user?.role === 'admin';
       }
       res.send({ admin });
-    })
+    });
 
     app.post('/users', async (req, res) => {
       const user = req.body;
-      const query = { email: user.email }
+      const query = { email: user.email };
       const existingUser = await userCollection.findOne(query);
       if (existingUser) {
-        return res.send({ message: 'user already exists', insertedId: null })
+        return res.send({ message: 'user already exists', insertedId: null });
       }
       const result = await userCollection.insertOne(user);
       res.send(result);
+    });
+
+    app.post('/payments', async (req, res) => {
+      const payment = req.body;
+      const paymentResult = await paymentCollection.insertOne(payment);
+      console.log('Payment Info', payment);
+      const query = {
+        _id: {
+          $in: payment.cartIds.map(id => new ObjectId(id))
+        }
+      };
+      const deleteResult = await cartCollection.deleteMany(query);
+      res.status(200).send({ paymentResult, deleteResult });
     });
 
     app.patch('/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {
@@ -104,17 +119,17 @@ async function run() {
         $set: {
           role: 'admin'
         }
-      }
+      };
       const result = await userCollection.updateOne(filter, updatedDoc);
       res.send(result);
-    })
+    });
 
     app.delete('/users/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) }
+      const query = { _id: new ObjectId(id) };
       const result = await userCollection.deleteOne(query);
       res.send(result);
-    })
+    });
 
     app.get('/products', async (req, res) => {
       try {
@@ -127,17 +142,17 @@ async function run() {
 
     app.get('/products/:id', async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) }
+      const query = { _id: new ObjectId(id) };
       const result = await productCollection.findOne(query);
       res.send(result);
-    })
+    });
 
-    app.patch('/products/:id' , async(req,res)=>{
+    app.patch('/products/:id', async (req, res) => {
       const item = req.body;
       const id = req.params.id;
-      const filter = {_id : new ObjectId(id)}
+      const filter = { _id: new ObjectId(id) };
       const updatedDoc = {
-        $set:{
+        $set: {
           image: item.image,
           productName: item.productName,
           description: item.description,
@@ -148,16 +163,16 @@ async function run() {
           warranty: item.warranty,
           rating: item.rating
         }
-      }
-      const result = await productCollection.updateOne(filter,updatedDoc);
+      };
+      const result = await productCollection.updateOne(filter, updatedDoc);
       res.send(result);
-    })
+    });
 
     app.post('/products', verifyToken, verifyAdmin, async (req, res) => {
       const item = req.body;
       const result = await productCollection.insertOne(item);
       res.send(result);
-    })
+    });
 
     app.get('/reviews', async (req, res) => {
       try {
@@ -168,6 +183,14 @@ async function run() {
       }
     });
 
+    app.get('/payments/:email', verifyToken, async (req, res) => {
+      const query = { email: req.params.email }
+      if (req.params.email !== req.decoded.email) {
+        return res.status(403).send({ message: 'forbidden access' });
+      }
+      const result = await paymentCollection.find(query).toArray();
+      res.send(result);
+    })
 
     app.get('/carts', async (req, res) => {
       try {
@@ -202,7 +225,6 @@ async function run() {
       }
     });
 
-
     app.post('/carts', async (req, res) => {
       try {
         const cartItem = req.body;
@@ -213,15 +235,38 @@ async function run() {
       }
     });
 
-    app.post('/jwt', async (req, res) => {
-      try {
-        const user = req.body;
-        const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' });
-        res.send({ token });
-      } catch (error) {
-        res.status(500).send({ message: 'Internal Server Error' });
-      }
+    app.post('/create-payment-intent', async (req, res) => {
+      const { price } = req.body;
+      const amount = parseInt(price * 100);
+      console.log(amount, 'amount inside the intent');
+
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amount,
+        currency: 'usd',
+        payment_method_types: ['card']
+      });
+
+      res.send({
+        clientSecret: paymentIntent.client_secret
+      });
     });
+
+    //Stats or Analysis
+    app.get('/admin-stats', async (req, res) => {
+      const users = await userCollection.estimatedDocumentCount();
+      const products = await productCollection.estimatedDocumentCount();
+      const orders = await paymentCollection.estimatedDocumentCount();
+
+      const payments = await paymentCollection.find().toArray();
+      const revenue = payments.reduce((total , payment) => total+payment.price , 0);
+
+      res.send({
+        users,
+        products,
+        orders,
+        revenue,
+      })
+    })
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
