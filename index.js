@@ -42,14 +42,14 @@ async function run() {
 
     // middlewares 
     const verifyToken = (req, res, next) => {
-      console.log('inside verify token', req.headers.authorization);
-      if (!req.headers.authorization) {
-        return res.status(401).send({ message: 'unauthorized access' });
+      const authorizationHeader = req.headers.authorization;
+      if (!authorizationHeader) {
+        return res.status(401).send({ message: 'Unauthorized access' });
       }
-      const token = req.headers.authorization.split(' ')[1];
+      const token = authorizationHeader.split(' ')[1];
       jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, decoded) => {
         if (err) {
-          return res.status(401).send({ message: 'unauthorized access' });
+          return res.status(401).send({ message: 'Unauthorized access' });
         }
         req.decoded = decoded;
         next();
@@ -60,9 +60,8 @@ async function run() {
       const email = req.decoded.email;
       const query = { email: email };
       const user = await userCollection.findOne(query);
-      const isAdmin = user?.role === 'admin';
-      if (!isAdmin) {
-        return res.status(403).send({ message: 'forbidden access' });
+      if (user?.role !== 'admin') {
+        return res.status(403).send({ message: 'Forbidden access' });
       }
       next();
     };
@@ -74,18 +73,12 @@ async function run() {
 
     app.get('/users/admin/:email', verifyToken, async (req, res) => {
       const email = req.params.email;
-
       if (email !== req.decoded.email) {
-        return res.status(403).send({ message: 'forbidden access' });
+        return res.status(403).send({ message: 'Forbidden access' });
       }
-
       const query = { email: email };
       const user = await userCollection.findOne(query);
-      let admin = false;
-      if (user) {
-        admin = user?.role === 'admin';
-      }
-      res.send({ admin });
+      res.send({ admin: user?.role === 'admin' });
     });
 
     app.post('/users', async (req, res) => {
@@ -93,7 +86,7 @@ async function run() {
       const query = { email: user.email };
       const existingUser = await userCollection.findOne(query);
       if (existingUser) {
-        return res.send({ message: 'user already exists', insertedId: null });
+        return res.send({ message: 'User already exists', insertedId: null });
       }
       const result = await userCollection.insertOne(user);
       res.send(result);
@@ -102,12 +95,7 @@ async function run() {
     app.post('/payments', async (req, res) => {
       const payment = req.body;
       const paymentResult = await paymentCollection.insertOne(payment);
-      console.log('Payment Info', payment);
-      const query = {
-        _id: {
-          $in: payment.cartIds.map(id => new ObjectId(id))
-        }
-      };
+      const query = { _id: { $in: payment.cartIds.map(id => new ObjectId(id)) } };
       const deleteResult = await cartCollection.deleteMany(query);
       res.status(200).send({ paymentResult, deleteResult });
     });
@@ -115,11 +103,7 @@ async function run() {
     app.patch('/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: {
-          role: 'admin'
-        }
-      };
+      const updatedDoc = { $set: { role: 'admin' } };
       const result = await userCollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
@@ -140,6 +124,15 @@ async function run() {
       }
     });
 
+    app.get('/payments', async (req, res) => {
+      try {
+        const result = await paymentCollection.find().toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: 'Internal Server Error' });
+      }
+    });
+
     app.get('/products/:id', async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -151,19 +144,7 @@ async function run() {
       const item = req.body;
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: {
-          image: item.image,
-          productName: item.productName,
-          description: item.description,
-          price: item.price,
-          category: item.category,
-          type: "Normal",
-          companyName: item.companyName,
-          warranty: item.warranty,
-          rating: item.rating
-        }
-      };
+      const updatedDoc = { $set: item };
       const result = await productCollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
@@ -171,6 +152,12 @@ async function run() {
     app.post('/products', verifyToken, verifyAdmin, async (req, res) => {
       const item = req.body;
       const result = await productCollection.insertOne(item);
+      res.send(result);
+    });
+
+    app.post('/reviews', async (req, res) => {
+      const item = req.body;
+      const result = await reviewsCollection.insertOne(item);
       res.send(result);
     });
 
@@ -183,14 +170,25 @@ async function run() {
       }
     });
 
-    app.get('/payments/:email', verifyToken, async (req, res) => {
-      const query = { email: req.params.email }
-      if (req.params.email !== req.decoded.email) {
-        return res.status(403).send({ message: 'forbidden access' });
+    app.get('/reviews/:reviewerName', async (req, res) => {
+      const { reviewerName } = req.params;
+      try {
+        const userReviews = await reviewsCollection.find({ reviewerName }).toArray();
+        res.json(userReviews);
+      } catch (error) {
+        res.status(500).json({ message: error.message });
       }
+    });
+
+    app.get('/payments/:email', verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ message: 'Forbidden access' });
+      }
+      const query = { email: email };
       const result = await paymentCollection.find(query).toArray();
       res.send(result);
-    })
+    });
 
     app.get('/carts', async (req, res) => {
       try {
@@ -238,17 +236,12 @@ async function run() {
     app.post('/create-payment-intent', async (req, res) => {
       const { price } = req.body;
       const amount = parseInt(price * 100);
-      console.log(amount, 'amount inside the intent');
-
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amount,
         currency: 'usd',
         payment_method_types: ['card']
       });
-
-      res.send({
-        clientSecret: paymentIntent.client_secret
-      });
+      res.send({ clientSecret: paymentIntent.client_secret });
     });
 
     //Stats or Analysis
@@ -256,32 +249,50 @@ async function run() {
       const users = await userCollection.estimatedDocumentCount();
       const products = await productCollection.estimatedDocumentCount();
       const orders = await paymentCollection.estimatedDocumentCount();
-
       const payments = await paymentCollection.find().toArray();
-      const revenue = payments.reduce((total , payment) => total+payment.price , 0);
+      const revenue = payments.reduce((total, payment) => total + payment.price, 0);
+      res.send({ users, products, orders, revenue });
+    });
 
-      res.send({
-        users,
-        products,
-        orders,
-        revenue,
-      })
-    })
+    app.patch('/payments/:id/accept', async (req, res) => {
+      const paymentId = req.params.id;
+
+      try {
+        const filter = { _id: new ObjectId(paymentId) };
+        const updateDoc = {
+          $set: {
+            status: 'accepted'
+          }
+        };
+
+        const result = await paymentCollection.updateOne(filter, updateDoc);
+
+        if (result.modifiedCount === 1) {
+          res.status(200).send({ message: 'Payment accepted successfully.' });
+        } else {
+          res.status(404).send({ message: 'Payment not found.' });
+        }
+      } catch (error) {
+        console.error('Error accepting payment:', error);
+        res.status(500).send({ message: 'Internal Server Error.' });
+      }
+    });
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
-  } catch (err) {
-    console.error('Failed to connect to MongoDB', err);
+
+  } finally {
+    // await client.close();
   }
 }
-
 run().catch(console.dir);
 
-app.get("/", (req, res) => {
-  res.send("Travel Kit is Running");
+app.get('/', (req, res) => {
+  res.send('Travel Kit is running');
 });
 
-app.listen({ port }, () => {
-  console.log(`Travel Kit is Running at ${port}`);
+app.listen(port, () => {
+  console.log(`Travel Kit is running on port ${port}`);
 });
